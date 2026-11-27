@@ -177,9 +177,11 @@ public:
             Vec rhs3 = Y2 - theta * h * (split.A3 * u);
             Vec Y3 = solver3.solve(rhs3);
 
-            // Stage 5: Explicit correction
-            // Y_tilde_0 = Y3 + (1/2) * h * (A * Y3 - A * u_n)
-            Vec Y_tilde_0 = Y3 + 0.5 * h * (A_full * Y3 - A_full * u);
+            /**
+             * Stage 5: explicit correction.
+             * Y_tilde_0 = Y0 + (1/2) * h * (A * Y3 - A * u_n).
+             */
+            Vec Y_tilde_0 = Y0 + 0.5 * h * (A_full * Y3 - A_full * u);
 
             // Stage 6-8: Implicit corrections (second sweep)
             Vec rhs4 = Y_tilde_0 - theta * h * (split.A1 * Y3);
