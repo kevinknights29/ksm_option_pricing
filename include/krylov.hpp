@@ -4,8 +4,8 @@
 #include <Eigen/Sparse>
 #include <chrono>
 #include <cmath>
-#include <iostream>
-#include "operators.hpp"
+#include <stdexcept>
+#include "solvers.hpp"
 
 namespace krylov {
 
@@ -92,9 +92,11 @@ inline Mat compute_matrix_exponential(const Mat& A) {
     double scale = std::pow(2.0, -s);
     Mat A_scaled = scale * A;
 
-    // Pade(6,6) approximation
-    // exp(A) ≈ p6(A) / q6(A)
-    const double c[] = {1.0, 0.5, 1.0/12.0, 1.0/120.0, 1.0/1680.0, 1.0/30240.0, 1.0/665280.0};
+    // Pade(6,6) approximation for exp(A) = p6(A) / q6(A).
+    const double c[] = {
+        1.0, 1.0 / 2.0, 5.0 / 44.0, 1.0 / 66.0,
+        1.0 / 792.0, 1.0 / 15840.0, 1.0 / 665280.0
+    };
 
     Mat I = Mat::Identity(n, n);
     Mat A2 = A_scaled * A_scaled;
@@ -122,10 +124,10 @@ inline Mat compute_matrix_exponential(const Mat& A) {
 }
 
 /**
- * Krylov exponential integrator (expmvp).
+ * Fixed-dimension Arnoldi exponential integrator.
  *
  * Computes exp(t*A)*v using Krylov subspace projection.
- * Based on Sidje (1998) and Niesen & Wright (2011).
+ * Uses the fixed-m, adaptive-h strategy described by Sidje (1998).
  */
 class KrylovExponentialSolver {
 public:
@@ -136,6 +138,7 @@ public:
     struct Stats {
         int num_steps = 0;
         int num_matvecs = 0;
+        int rejected_steps = 0;
     };
 
     Stats stats;
@@ -204,6 +207,7 @@ public:
                     h = std::min(1.2 * h, t - tau_done);
                 }
             } else {
+                stats.rejected_steps++;
                 // Reduce step size
                 double factor = 0.9 * std::pow(tol * u.norm() / (err_est + 1e-14), 1.0 / (m + 1));
                 factor = std::max(0.2, std::min(factor, 0.9));
@@ -214,6 +218,11 @@ public:
             }
         }
 
+        if (tau_done < t - 1e-14) {
+            throw std::runtime_error(
+                "Fixed-dimension Arnoldi failed to reach the requested final time");
+        }
+
         return u;
     }
 
@@ -221,29 +230,29 @@ public:
      * Solve du/dt = A*u from t=0 to t=T with specified tolerance.
      */
     SolverResult solve(const SpMat& A, const Vec& u0, double T) {
-        auto start = std::chrono::high_resolution_clock::now();
+        auto start = std::chrono::steady_clock::now();
 
         Vec u = expmv(A, u0, T);
 
-        auto end = std::chrono::high_resolution_clock::now();
+        auto end = std::chrono::steady_clock::now();
         double elapsed = std::chrono::duration<double>(end - start).count();
 
-        return {u, elapsed, stats.num_steps, "Krylov-expmvp"};
+        return {u, elapsed, stats.num_steps, "Fixed-m Arnoldi"};
     }
 };
 
 /**
- * Al-Mohy and Higham single-precision exponential integrator.
+ * Fixed-step single-precision Arnoldi exponential integrator.
  *
  * Uses a fixed number of substeps with single precision
  * matrix exponential computation for the Krylov projection.
  */
-class AlMohyHighamSolver {
+class FixedStepFloatArnoldiSolver {
 public:
     int krylov_dim = 30;
 
     SolverResult solve(const SpMat& A, const Vec& u0, double T, int num_steps) {
-        auto start = std::chrono::high_resolution_clock::now();
+        auto start = std::chrono::steady_clock::now();
 
         double h = T / num_steps;
         Vec u = u0;
@@ -268,10 +277,10 @@ public:
             u = arnoldi.beta * arnoldi.V.leftCols(arnoldi.m) * y;
         }
 
-        auto end = std::chrono::high_resolution_clock::now();
+        auto end = std::chrono::steady_clock::now();
         double elapsed = std::chrono::duration<double>(end - start).count();
 
-        return {u, elapsed, num_steps, "Al-Mohy-Higham"};
+        return {u, elapsed, num_steps, "Float Arnoldi"};
     }
 
 private:
@@ -290,8 +299,11 @@ private:
         float scale = std::pow(2.0f, -s);
         Eigen::MatrixXf A_scaled = scale * A;
 
-        // Pade(6,6) coefficients
-        const float c[] = {1.0f, 0.5f, 1.0f/12.0f, 1.0f/120.0f, 1.0f/1680.0f, 1.0f/30240.0f, 1.0f/665280.0f};
+        // Pade(6,6) coefficients.
+        const float c[] = {
+            1.0f, 1.0f / 2.0f, 5.0f / 44.0f, 1.0f / 66.0f,
+            1.0f / 792.0f, 1.0f / 15840.0f, 1.0f / 665280.0f
+        };
 
         Eigen::MatrixXf I = Eigen::MatrixXf::Identity(n, n);
         Eigen::MatrixXf A2 = A_scaled * A_scaled;

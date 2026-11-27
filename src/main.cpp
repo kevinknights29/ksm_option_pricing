@@ -4,6 +4,8 @@
 #include <vector>
 #include <string>
 #include <cmath>
+#include <filesystem>
+#include <stdexcept>
 
 #include "mesh.hpp"
 #include "operators.hpp"
@@ -22,22 +24,23 @@ struct BenchmarkResult {
     int grid_points;
     int num_steps;
     double tolerance;
-    double cpu_time;
+    double wall_time_seconds;
     double error;
     double spot_price;
 };
 
 /**
- * Compute the "exact" solution using a very accurate method.
- * Uses Hundsdorfer-Verwer with many steps as reference.
+ * Compute a high-step Hundsdorfer-Verwer temporal baseline.
+ *
+ * This is not an independent reference solution and must not be interpreted as
+ * the exact solution used by Niesen and Wright (2011).
  */
-Eigen::VectorXd compute_exact_solution(const ADISplit& split, const Eigen::VectorXd& u0, double T) {
-    // Use HV with many steps as "exact" reference
-    HundsdorferVerwerSolver exact_solver;
+Eigen::VectorXd compute_hv_baseline(const ADISplit& split, const Eigen::VectorXd& u0, double T) {
+    HundsdorferVerwerSolver baseline_solver;
     int high_steps = 2048;
-    auto result = exact_solver.solve(split, u0, T, high_steps);
-    std::cout << "  Reference solution computed with HV (" << high_steps << " steps) in "
-              << result.cpu_time << " seconds" << std::endl;
+    auto result = baseline_solver.solve(split, u0, T, high_steps);
+    std::cout << "  Temporal baseline computed with HV (" << high_steps << " steps) in "
+              << result.wall_time_seconds << " seconds" << std::endl;
     return result.solution;
 }
 
@@ -82,20 +85,21 @@ std::vector<BenchmarkResult> run_benchmarks(int N_points,
         ref_price = params.basket_ref;
     }
 
-    // Compute "exact" solution using HV with many steps
-    std::cout << "  Computing reference solution..." << std::endl;
-    Eigen::VectorXd u_exact = compute_exact_solution(adi_split, u0, params.T);
+    // Compute a provisional temporal baseline using HV with many steps.
+    std::cout << "  Computing provisional temporal baseline..." << std::endl;
+    Eigen::VectorXd u_exact = compute_hv_baseline(adi_split, u0, params.T);
 
-    int spot_idx = find_spot_index(mesh, params.K);
-    double exact_spot = u_exact(spot_idx);
-    std::cout << "  Reference spot price: " << exact_spot
+    double exact_spot = interpolate_at_spot(u_exact, mesh, params.K);
+    std::cout << "  HV baseline spot price: " << exact_spot
               << " (analytical ref: " << ref_price << ")" << std::endl;
 
     // Step counts for fixed-step methods
-    std::vector<int> step_counts = {16, 32, 64, 128, 256, 512};
+    std::vector<int> step_counts = {16, 32, 64, 128, 256, 512, 1024};
 
     // Tolerances for adaptive methods
-    std::vector<double> tolerances = {1e-1, 1e-2, 1e-3, 1e-4, 1e-5, 1e-6, 1e-7};
+    std::vector<double> tolerances = {
+        1e-1, 3.162277660168379e-3, 1e-4, 3.162277660168379e-6, 1e-7
+    };
 
     // 1. Crank-Nicolson (skip for large grids - too slow)
     if (N_points <= 31) {
@@ -106,10 +110,10 @@ std::vector<BenchmarkResult> run_benchmarks(int N_points,
             double error = compute_cube_error(result.solution, u_exact, mesh, params.K);
             results.push_back({
                 "Crank-Nicolson", option_type, N_points, steps, 0.0,
-                result.cpu_time, error, result.solution(spot_idx)
+                result.wall_time_seconds, error, interpolate_at_spot(result.solution, mesh, params.K)
             });
             std::cout << "    Steps=" << steps << ", Time=" << std::fixed << std::setprecision(3)
-                      << result.cpu_time << "s, Error=" << std::scientific << error << std::endl;
+                      << result.wall_time_seconds << "s, Error=" << std::scientific << error << std::endl;
         }
     }
 
@@ -121,10 +125,10 @@ std::vector<BenchmarkResult> run_benchmarks(int N_points,
         double error = compute_cube_error(result.solution, u_exact, mesh, params.K);
         results.push_back({
             "Douglas-Rachford", option_type, N_points, steps, 0.0,
-            result.cpu_time, error, result.solution(spot_idx)
+            result.wall_time_seconds, error, interpolate_at_spot(result.solution, mesh, params.K)
         });
         std::cout << "    Steps=" << steps << ", Time=" << std::fixed << std::setprecision(3)
-                  << result.cpu_time << "s, Error=" << std::scientific << error << std::endl;
+                  << result.wall_time_seconds << "s, Error=" << std::scientific << error << std::endl;
     }
 
     // 3. Hundsdorfer-Verwer ADI
@@ -135,14 +139,14 @@ std::vector<BenchmarkResult> run_benchmarks(int N_points,
         double error = compute_cube_error(result.solution, u_exact, mesh, params.K);
         results.push_back({
             "Hundsdorfer-Verwer", option_type, N_points, steps, 0.0,
-            result.cpu_time, error, result.solution(spot_idx)
+            result.wall_time_seconds, error, interpolate_at_spot(result.solution, mesh, params.K)
         });
         std::cout << "    Steps=" << steps << ", Time=" << std::fixed << std::setprecision(3)
-                  << result.cpu_time << "s, Error=" << std::scientific << error << std::endl;
+                  << result.wall_time_seconds << "s, Error=" << std::scientific << error << std::endl;
     }
 
     // 4. Krylov exponential integrator
-    std::cout << "\n  Running Krylov-expmvp..." << std::endl;
+    std::cout << "\n  Running fixed-m Arnoldi..." << std::endl;
     for (double tol : tolerances) {
         KrylovExponentialSolver krylov_solver;
         krylov_solver.tol = tol;
@@ -150,28 +154,29 @@ std::vector<BenchmarkResult> run_benchmarks(int N_points,
         auto result = krylov_solver.solve(pde_op.A, u0, params.T);
         double error = compute_cube_error(result.solution, u_exact, mesh, params.K);
         results.push_back({
-            "Krylov-expmvp", option_type, N_points, result.num_steps, tol,
-            result.cpu_time, error, result.solution(spot_idx)
+            "Fixed-m Arnoldi", option_type, N_points, result.num_steps, tol,
+            result.wall_time_seconds, error, interpolate_at_spot(result.solution, mesh, params.K)
         });
         std::cout << "    Tol=" << std::scientific << tol
-                  << ", Time=" << std::fixed << std::setprecision(3) << result.cpu_time
+                  << ", Time=" << std::fixed << std::setprecision(3) << result.wall_time_seconds
                   << "s, Error=" << std::scientific << error
-                  << ", Steps=" << result.num_steps << std::endl;
+                  << ", Steps=" << result.num_steps
+                  << ", Rejected=" << krylov_solver.stats.rejected_steps << std::endl;
     }
 
-    // 5. Al-Mohy-Higham single precision
-    std::cout << "\n  Running Al-Mohy-Higham..." << std::endl;
-    AlMohyHighamSolver amh_solver;
+    // 5. Fixed-step single-precision Arnoldi
+    std::cout << "\n  Running float Arnoldi..." << std::endl;
+    FixedStepFloatArnoldiSolver amh_solver;
     std::vector<int> amh_steps = {1, 2, 4, 8, 16, 32, 64, 128, 256};
     for (int steps : amh_steps) {
         auto result = amh_solver.solve(pde_op.A, u0, params.T, steps);
         double error = compute_cube_error(result.solution, u_exact, mesh, params.K);
         results.push_back({
-            "Al-Mohy-Higham", option_type, N_points, steps, 0.0,
-            result.cpu_time, error, result.solution(spot_idx)
+            "Float Arnoldi", option_type, N_points, steps, 0.0,
+            result.wall_time_seconds, error, interpolate_at_spot(result.solution, mesh, params.K)
         });
         std::cout << "    Steps=" << steps << ", Time=" << std::fixed << std::setprecision(3)
-                  << result.cpu_time << "s, Error=" << std::scientific << error << std::endl;
+                  << result.wall_time_seconds << "s, Error=" << std::scientific << error << std::endl;
     }
 
     return results;
@@ -182,8 +187,16 @@ std::vector<BenchmarkResult> run_benchmarks(int N_points,
  */
 void write_results_csv(const std::vector<BenchmarkResult>& results,
                        const std::string& filename) {
-    std::ofstream file(filename);
-    file << "method,option_type,grid_points,num_steps,tolerance,cpu_time,error,spot_price\n";
+    std::ofstream file;
+    const std::filesystem::path output_path(filename);
+    if (output_path.has_parent_path()) {
+        std::filesystem::create_directories(output_path.parent_path());
+    }
+    file.open(filename);
+    if (!file) {
+        throw std::runtime_error("Could not open results file: " + filename);
+    }
+    file << "method,option_type,grid_points,num_steps,tolerance,wall_time_seconds,error_vs_hv2048,spot_price\n";
 
     for (const auto& r : results) {
         file << r.method << ","
@@ -191,19 +204,22 @@ void write_results_csv(const std::vector<BenchmarkResult>& results,
              << r.grid_points << ","
              << r.num_steps << ","
              << std::scientific << r.tolerance << ","
-             << r.cpu_time << ","
+             << r.wall_time_seconds << ","
              << r.error << ","
              << std::fixed << std::setprecision(6) << r.spot_price << "\n";
     }
 
-    file.close();
+    file.flush();
+    if (!file) {
+        throw std::runtime_error("Could not write results file: " + filename);
+    }
     std::cout << "\nResults written to " << filename << std::endl;
 }
 
 int main(int argc, char* argv[]) {
     std::cout << "==================================================" << std::endl;
     std::cout << "Krylov Subspace Methods for European Option Pricing" << std::endl;
-    std::cout << "Replicating Section 5 of Niesen & Wright (2011)" << std::endl;
+    std::cout << "Section 5 diagnostic driver for Niesen & Wright (2011)" << std::endl;
     std::cout << "==================================================" << std::endl;
 
     OptionParameters params;
@@ -263,8 +279,8 @@ int main(int argc, char* argv[]) {
 
             for (const auto& r : all_results) {
                 if (r.option_type == opt_type && r.grid_points == N) {
-                    if (r.error < 1e-3 && r.cpu_time < best_time) {
-                        best_time = r.cpu_time;
+                    if (r.error < 1e-3 && r.wall_time_seconds < best_time) {
+                        best_time = r.wall_time_seconds;
                         best_method = r.method;
                     }
                 }
