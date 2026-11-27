@@ -84,7 +84,7 @@ inline SpMat build_second_derivative(const Mesh1D& mesh) {
 
 /**
  * Kronecker product for sparse matrices.
- * (A ⊗ B)_{(i1*n2+i2), (j1*n2+j2)} = A_{i1,j1} * B_{i2,j2}
+ * (A \otimes B)_{(i1*n2+i2), (j1*n2+j2)} = A_{i1,j1} * B_{i2,j2}
  */
 inline SpMat kronecker_product(const SpMat& A, const SpMat& B) {
     int m1 = A.rows(), n1 = A.cols();
@@ -174,12 +174,12 @@ public:
 
         // Second derivative terms: (1/2) * rho_ij * sigma_i * sigma_j * s_i * s_j * d2u/ds_i*ds_j
         // Diagonal terms (i == j):
-        // (1/2) * sigma_1^2 * s_1^2 * d2u/ds_1^2 => (I3 ⊗ I2 ⊗ D1^2 S1)
+        // (1/2) * sigma_1^2 * s_1^2 * d2u/ds_1^2 => (I3 \otimes I2 \otimes D1^2 S1)
         // etc.
 
         // For mixed derivatives (i != j):
         // sigma_i * sigma_j * rho_ij * s_i * s_j * d2u/ds_i ds_j
-        // d2u/ds_1 ds_2 = T1 ⊗ T2 applied appropriately
+        // d2u/ds_1 ds_2 = T1 \otimes T2 applied appropriately
 
         // Build each term and add to A
         double coeff11 = 0.5 * sigma(0) * sigma(0);
@@ -190,7 +190,7 @@ public:
         double coeff23 = sigma(1) * sigma(2) * rho(1, 2);
 
         // Term 1: (1/2) * sigma_1^2 * s_1^2 * d2u/ds_1^2
-        // = I3 ⊗ I2 ⊗ (D1^2 * S1)
+        // = I3 \otimes I2 \otimes (D1^2 * S1)
         SpMat D1_sq = D1 * D1;
         SpMat term1 = kronecker_product(I3, kronecker_product(I2, D1_sq * S1));
         add_scaled_sparse(triplets, term1, coeff11);
@@ -206,30 +206,30 @@ public:
         add_scaled_sparse(triplets, term3, coeff33);
 
         // Mixed term 12: rho_12 * sigma_1 * sigma_2 * s_1 * s_2 * d2u/ds_1 ds_2
-        // = I3 ⊗ (D2 * T2) ⊗ (D1 * T1)
+        // = I3 \otimes (D2 * T2) \otimes (D1 * T1)
         SpMat term12 = kronecker_product(I3, kronecker_product(D2 * T2, D1 * T1));
         add_scaled_sparse(triplets, term12, coeff12);
 
         // Mixed term 13: rho_13 * sigma_1 * sigma_3 * s_1 * s_3 * d2u/ds_1 ds_3
-        // = (D3 * T3) ⊗ I2 ⊗ (D1 * T1)
+        // = (D3 * T3) \otimes I2 \otimes (D1 * T1)
         SpMat term13 = kronecker_product(D3 * T3, kronecker_product(I2, D1 * T1));
         add_scaled_sparse(triplets, term13, coeff13);
 
         // Mixed term 23: rho_23 * sigma_2 * sigma_3 * s_2 * s_3 * d2u/ds_2 ds_3
-        // = (D3 * T3) ⊗ (D2 * T2) ⊗ I1
+        // = (D3 * T3) \otimes (D2 * T2) \otimes I1
         SpMat term23 = kronecker_product(D3 * T3, kronecker_product(D2 * T2, I1));
         add_scaled_sparse(triplets, term23, coeff23);
 
         // First derivative terms: r * s_i * du/ds_i
-        // r * s_1 * du/ds_1 = I3 ⊗ I2 ⊗ (D1 * T1)
+        // r * s_1 * du/ds_1 = I3 \otimes I2 \otimes (D1 * T1)
         SpMat drift1 = kronecker_product(I3, kronecker_product(I2, D1 * T1));
         add_scaled_sparse(triplets, drift1, r);
 
-        // r * s_2 * du/ds_2 = I3 ⊗ (D2 * T2) ⊗ I1
+        // r * s_2 * du/ds_2 = I3 \otimes (D2 * T2) \otimes I1
         SpMat drift2 = kronecker_product(I3, kronecker_product(D2 * T2, I1));
         add_scaled_sparse(triplets, drift2, r);
 
-        // r * s_3 * du/ds_3 = (D3 * T3) ⊗ I2 ⊗ I1
+        // r * s_3 * du/ds_3 = (D3 * T3) \otimes I2 \otimes I1
         SpMat drift3 = kronecker_product(D3 * T3, kronecker_product(I2, I1));
         add_scaled_sparse(triplets, drift3, r);
 

@@ -2,14 +2,14 @@
 """
 Plot benchmark results for Krylov option pricing methods.
 
-Replicates Figure 1 from Niesen & Wright (2011):
+Plots provisional Section 5 diagnostic results:
 - Error vs CPU time (log-log scale)
 - Methods distinguished by color:
   - Crank-Nicolson: red
   - Douglas-Rachford: green
   - Hundsdorfer-Verwer: blue
-  - Krylov-expmvp: black
-  - Al-Mohy-Higham: cyan
+  - Fixed-m Arnoldi: black
+  - Float Arnoldi: cyan
 """
 
 import pandas as pd
@@ -22,16 +22,16 @@ METHOD_COLORS = {
     'Crank-Nicolson': 'red',
     'Douglas-Rachford': 'green',
     'Hundsdorfer-Verwer': 'blue',
-    'Krylov-expmvp': 'black',
-    'Al-Mohy-Higham': 'cyan'
+    'Fixed-m Arnoldi': 'black',
+    'Float Arnoldi': 'cyan'
 }
 
 METHOD_MARKERS = {
     'Crank-Nicolson': 'o',
     'Douglas-Rachford': 's',
     'Hundsdorfer-Verwer': '^',
-    'Krylov-expmvp': 'D',
-    'Al-Mohy-Higham': 'v'
+    'Fixed-m Arnoldi': 'D',
+    'Float Arnoldi': 'v'
 }
 
 
@@ -54,7 +54,7 @@ def plot_error_vs_time(df: pd.DataFrame, option_type: str, grid_points: int,
         if len(method_data) == 0:
             continue
 
-        ax.loglog(method_data['cpu_time'], method_data['error'],
+        ax.loglog(method_data['wall_time_seconds'], method_data['error_vs_hv2048'],
                   color=METHOD_COLORS[method],
                   marker=METHOD_MARKERS[method],
                   linestyle='-',
@@ -87,15 +87,15 @@ def create_figure1_replica(df: pd.DataFrame, output_dir: Path):
 
     # Rainbow option
     plot_error_vs_time(df, 'rainbow', grid_sizes[0], axes[0, 0],
-                       f'Rainbow Option ({grid_sizes[0]}³ grid)')
+                       f'Rainbow Option ({grid_sizes[0]}^3 grid)')
     plot_error_vs_time(df, 'rainbow', grid_sizes[1], axes[0, 1],
-                       f'Rainbow Option ({grid_sizes[1]}³ grid)')
+                       f'Rainbow Option ({grid_sizes[1]}^3 grid)')
 
     # Basket option
     plot_error_vs_time(df, 'basket', grid_sizes[0], axes[1, 0],
-                       f'Basket Option ({grid_sizes[0]}³ grid)')
+                       f'Basket Option ({grid_sizes[0]}^3 grid)')
     plot_error_vs_time(df, 'basket', grid_sizes[1], axes[1, 1],
-                       f'Basket Option ({grid_sizes[1]}³ grid)')
+                       f'Basket Option ({grid_sizes[1]}^3 grid)')
 
     # Add legend to first subplot
     handles, labels = axes[0, 0].get_legend_handles_labels()
@@ -103,7 +103,7 @@ def create_figure1_replica(df: pd.DataFrame, output_dir: Path):
                bbox_to_anchor=(0.5, 0.98), fontsize=9)
 
     plt.suptitle('Error vs CPU Time for European Option Pricing Methods\n'
-                 '(Replication of Figure 1, Niesen & Wright 2011)',
+                 '(Provisional diagnostic, not a Figure 1 reproduction)',
                  fontsize=12, y=1.02)
 
     plt.tight_layout()
@@ -134,13 +134,14 @@ def create_method_comparison(df: pd.DataFrame, output_dir: Path):
 
             # Find the run closest to 1e-4 error
             target_error = 1e-4
-            closest_idx = (method_data['error'] - target_error).abs().idxmin()
+            closest_idx = (
+                method_data['error_vs_hv2048'] - target_error).abs().idxmin()
             closest_row = method_data.loc[closest_idx]
 
             # Only include if error is reasonable
-            if closest_row['error'] < 1e-2:
+            if closest_row['error_vs_hv2048'] < 1e-2:
                 methods.append(method)
-                times_at_1e4.append(closest_row['cpu_time'])
+                times_at_1e4.append(closest_row['wall_time_seconds'])
 
         if len(methods) > 0:
             colors = [METHOD_COLORS[m] for m in methods]
@@ -169,7 +170,7 @@ def print_summary_table(df: pd.DataFrame):
         subset = df[df['option_type'] == option_type]
 
         for grid in sorted(subset['grid_points'].unique()):
-            print(f"\n  Grid: {grid}³ points")
+            print(f"\n  Grid: {grid}^3 points")
             grid_data = subset[subset['grid_points'] == grid]
 
             for method in METHOD_COLORS.keys():
@@ -178,11 +179,11 @@ def print_summary_table(df: pd.DataFrame):
                     continue
 
                 # Find best error achieved
-                best_idx = method_data['error'].idxmin()
+                best_idx = method_data['error_vs_hv2048'].idxmin()
                 best = method_data.loc[best_idx]
 
-                print(f"    {method:20s}: error={best['error']:.2e}, "
-                      f"time={best['cpu_time']:.3f}s, "
+                print(f"    {method:20s}: error={best['error_vs_hv2048']:.2e}, "
+                      f"time={best['wall_time_seconds']:.3f}s, "
                       f"steps={int(best['num_steps'])}")
 
 

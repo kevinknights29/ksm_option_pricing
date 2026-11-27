@@ -17,7 +17,7 @@ using Vec = Eigen::VectorXd;
  */
 struct SolverResult {
     Vec solution;
-    double cpu_time;      // seconds
+    double wall_time_seconds;
     int num_steps;
     std::string method_name;
 };
@@ -32,7 +32,7 @@ struct SolverResult {
 class CrankNicolsonSolver {
 public:
     SolverResult solve(const SpMat& A, const Vec& u0, double T, int num_steps) {
-        auto start = std::chrono::high_resolution_clock::now();
+        auto start = std::chrono::steady_clock::now();
 
         int N = A.rows();
         double h = T / num_steps;
@@ -57,7 +57,7 @@ public:
             u = solver.solve(rhs);
         }
 
-        auto end = std::chrono::high_resolution_clock::now();
+        auto end = std::chrono::steady_clock::now();
         double elapsed = std::chrono::duration<double>(end - start).count();
 
         return {u, elapsed, num_steps, "Crank-Nicolson"};
@@ -76,7 +76,7 @@ public:
 class DouglasRachfordSolver {
 public:
     SolverResult solve(const ADISplit& split, const Vec& u0, double T, int num_steps) {
-        auto start = std::chrono::high_resolution_clock::now();
+        auto start = std::chrono::steady_clock::now();
 
         int N = split.A1.rows();
         double h = T / num_steps;
@@ -122,7 +122,7 @@ public:
             u = Y3;
         }
 
-        auto end = std::chrono::high_resolution_clock::now();
+        auto end = std::chrono::steady_clock::now();
         double elapsed = std::chrono::duration<double>(end - start).count();
 
         return {u, elapsed, num_steps, "Douglas-Rachford"};
@@ -138,7 +138,7 @@ public:
 class HundsdorferVerwerSolver {
 public:
     SolverResult solve(const ADISplit& split, const Vec& u0, double T, int num_steps) {
-        auto start = std::chrono::high_resolution_clock::now();
+        auto start = std::chrono::steady_clock::now();
 
         int N = split.A1.rows();
         double h = T / num_steps;
@@ -196,7 +196,7 @@ public:
             u = Y_tilde_3;
         }
 
-        auto end = std::chrono::high_resolution_clock::now();
+        auto end = std::chrono::steady_clock::now();
         double elapsed = std::chrono::duration<double>(end - start).count();
 
         return {u, elapsed, num_steps, "Hundsdorfer-Verwer"};

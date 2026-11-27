@@ -2,7 +2,10 @@
 
 #include <Eigen/Dense>
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <stdexcept>
+#include <utility>
 #include "mesh.hpp"
 
 namespace krylov {
@@ -78,41 +81,73 @@ struct OptionParameters {
     static constexpr double basket_ref = 13.2449;
 };
 
-/**
- * Find the index closest to the spot price.
- */
+/** Returns the index of the mesh point closest to value. */
+inline int closest_index(const Mesh1D& mesh, double value) {
+    const auto begin = mesh.points.data();
+    const auto end = begin + mesh.N;
+    const auto upper = std::lower_bound(begin, end, value);
+    if (upper == begin) return 0;
+    if (upper == end) return mesh.N - 1;
+
+    const int upper_index = static_cast<int>(upper - begin);
+    const int lower_index = upper_index - 1;
+    return value - mesh.points(lower_index) <= mesh.points(upper_index) - value
+        ? lower_index : upper_index;
+}
+
+/** Find the grid point closest to (spot, spot, spot). */
 inline int find_spot_index(const Mesh3D& mesh, double spot) {
-    int idx1 = 0, idx2 = 0, idx3 = 0;
+    return mesh.linear_index(
+        closest_index(mesh.mesh1, spot),
+        closest_index(mesh.mesh2, spot),
+        closest_index(mesh.mesh3, spot));
+}
 
-    // Find closest index in each dimension
-    double min_dist1 = std::abs(mesh.mesh1.points(0) - spot);
-    for (int i = 1; i < mesh.N1; ++i) {
-        double dist = std::abs(mesh.mesh1.points(i) - spot);
-        if (dist < min_dist1) {
-            min_dist1 = dist;
-            idx1 = i;
-        }
+/** Returns the lower index and upper interpolation weight for value. */
+inline std::pair<int, double> interpolation_bracket(const Mesh1D& mesh,
+                                                    double value) {
+    if (mesh.N < 2 || value < mesh.points(0) || value > mesh.points(mesh.N - 1)) {
+        throw std::invalid_argument("Interpolation point is outside the mesh");
     }
 
-    double min_dist2 = std::abs(mesh.mesh2.points(0) - spot);
-    for (int i = 1; i < mesh.N2; ++i) {
-        double dist = std::abs(mesh.mesh2.points(i) - spot);
-        if (dist < min_dist2) {
-            min_dist2 = dist;
-            idx2 = i;
-        }
+    const auto begin = mesh.points.data();
+    const auto end = begin + mesh.N;
+    const auto upper = std::lower_bound(begin, end, value);
+    if (upper == begin) return {0, 0.0};
+    if (upper == end) return {mesh.N - 2, 1.0};
+
+    const int lower_index = static_cast<int>(upper - begin) - 1;
+    const double lower = mesh.points(lower_index);
+    const double weight = (value - lower) /
+        (mesh.points(lower_index + 1) - lower);
+    return {lower_index, weight};
+}
+
+/** Evaluates a grid solution at (spot, spot, spot) by trilinear interpolation. */
+inline double interpolate_at_spot(const Eigen::VectorXd& u,
+                                  const Mesh3D& mesh,
+                                  double spot) {
+    if (u.size() != mesh.total_points) {
+        throw std::invalid_argument("Solution size does not match the mesh");
     }
 
-    double min_dist3 = std::abs(mesh.mesh3.points(0) - spot);
-    for (int i = 1; i < mesh.N3; ++i) {
-        double dist = std::abs(mesh.mesh3.points(i) - spot);
-        if (dist < min_dist3) {
-            min_dist3 = dist;
-            idx3 = i;
+    const auto [i0, wi] = interpolation_bracket(mesh.mesh1, spot);
+    const auto [j0, wj] = interpolation_bracket(mesh.mesh2, spot);
+    const auto [k0, wk] = interpolation_bracket(mesh.mesh3, spot);
+    const std::array<double, 2> weights_i = {1.0 - wi, wi};
+    const std::array<double, 2> weights_j = {1.0 - wj, wj};
+    const std::array<double, 2> weights_k = {1.0 - wk, wk};
+
+    double value = 0.0;
+    for (int di = 0; di < 2; ++di) {
+        for (int dj = 0; dj < 2; ++dj) {
+            for (int dk = 0; dk < 2; ++dk) {
+                value += weights_i[di] * weights_j[dj] * weights_k[dk]
+                    * u(mesh.linear_index(i0 + di, j0 + dj, k0 + dk));
+            }
         }
     }
-
-    return mesh.linear_index(idx1, idx2, idx3);
+    return value;
 }
 
 /**
@@ -123,32 +158,21 @@ inline double compute_cube_error(const Eigen::VectorXd& u,
                                   const Eigen::VectorXd& u_exact,
                                   const Mesh3D& mesh,
                                   double spot) {
-    int center1 = 0, center2 = 0, center3 = 0;
+    if (u.size() != mesh.total_points || u_exact.size() != mesh.total_points) {
+        throw std::invalid_argument("Solution size does not match the mesh");
+    }
 
-    // Find center indices
-    for (int i = 0; i < mesh.N1; ++i) {
-        if (mesh.mesh1.points(i) >= spot) {
-            center1 = i;
-            break;
-        }
-    }
-    for (int i = 0; i < mesh.N2; ++i) {
-        if (mesh.mesh2.points(i) >= spot) {
-            center2 = i;
-            break;
-        }
-    }
-    for (int i = 0; i < mesh.N3; ++i) {
-        if (mesh.mesh3.points(i) >= spot) {
-            center3 = i;
-            break;
-        }
+    const int center1 = closest_index(mesh.mesh1, spot);
+    const int center2 = closest_index(mesh.mesh2, spot);
+    const int center3 = closest_index(mesh.mesh3, spot);
+    if (center1 < 4 || center1 + 4 >= mesh.N1 ||
+        center2 < 4 || center2 + 4 >= mesh.N2 ||
+        center3 < 4 || center3 + 4 >= mesh.N3) {
+        throw std::invalid_argument("The requested 9x9x9 error cube does not fit the mesh");
     }
 
     // Compute error on 9x9x9 cube
     double error_sq = 0.0;
-    int count = 0;
-
     for (int di = -4; di <= 4; ++di) {
         for (int dj = -4; dj <= 4; ++dj) {
             for (int dk = -4; dk <= 4; ++dk) {
@@ -156,14 +180,9 @@ inline double compute_cube_error(const Eigen::VectorXd& u,
                 int j = center2 + dj;
                 int k = center3 + dk;
 
-                if (i >= 0 && i < mesh.N1 &&
-                    j >= 0 && j < mesh.N2 &&
-                    k >= 0 && k < mesh.N3) {
-                    int idx = mesh.linear_index(i, j, k);
-                    double diff = u(idx) - u_exact(idx);
-                    error_sq += diff * diff;
-                    count++;
-                }
+                int idx = mesh.linear_index(i, j, k);
+                double diff = u(idx) - u_exact(idx);
+                error_sq += diff * diff;
             }
         }
     }

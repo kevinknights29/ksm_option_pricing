@@ -8,13 +8,14 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 include(CTest)
 
-# Optimization flags
+# Default single-configuration generators to Release.
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
 endif()
 
-set(CMAKE_CXX_FLAGS_RELEASE "-O3 -march=native -DNDEBUG")
-set(CMAKE_CXX_FLAGS_DEBUG "-g -O0 -Wall -Wextra")
+option(OPTION_PRICING_NATIVE_ARCH
+       "Enable host-specific instruction generation for local timing runs"
+       OFF)
 
 # Find Eigen, with a pinned source fallback for clean checkouts.
 find_package(Eigen3 3.4 QUIET NO_MODULE)
@@ -23,7 +24,7 @@ if(NOT TARGET Eigen3::Eigen)
     FetchContent_Declare(
         Eigen3
         GIT_REPOSITORY https://gitlab.com/libeigen/eigen.git
-        GIT_TAG 3.4.0
+        GIT_TAG 3147391d946bb4b6c68edd901f2add6ac1f31f8c
         GIT_SHALLOW TRUE
     )
     set(EIGEN_BUILD_DOC OFF CACHE BOOL "" FORCE)
@@ -33,8 +34,15 @@ endif()
 
 # Main library
 add_library(option_pricing_lib INTERFACE)
-target_include_directories(option_pricing_lib INTERFACE ${CMAKE_SOURCE_DIR}/include)
+target_include_directories(option_pricing_lib INTERFACE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(option_pricing_lib INTERFACE Eigen3::Eigen)
+target_compile_options(option_pricing_lib INTERFACE
+    $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall;-Wextra>)
+if(OPTION_PRICING_NATIVE_ARCH)
+    target_compile_options(option_pricing_lib INTERFACE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-march=native>)
+endif()
 
 # Main executable
 add_executable(option_pricing src/main.cpp)
@@ -44,4 +52,8 @@ if(BUILD_TESTING)
     add_executable(solver_order_test tests/solver_order_test.cpp)
     target_link_libraries(solver_order_test PRIVATE option_pricing_lib)
     add_test(NAME solver_order COMMAND solver_order_test)
+
+    add_executable(numerical_utilities_test tests/numerical_utilities_test.cpp)
+    target_link_libraries(numerical_utilities_test PRIVATE option_pricing_lib)
+    add_test(NAME numerical_utilities COMMAND numerical_utilities_test)
 endif()
